@@ -69,18 +69,28 @@ source(file = "scripts/sim_functions/sim_funct.R")
 # Be warned - this will take ~20 minutes to download and process all the data.
 # Luckily, you only need to do this once (for each species, that is!)
 spec_to_download <- "Townsend's Warbler"
+```
 
+
+```{r,eval=FALSE}
 if(file.exists(paste("data/species_maps/breeding/",gsub(" ", "_", spec_to_download),"_breeding_all",sep="",".csv"))){
   print("You are good to go!")
 } else {
-  get_spec_maps(spec_to_download,with_error_maps = FALSE)
+  get_spec_maps_new(spec_to_download,with_error_maps = FALSE)
 }
+```
+
+
+```{r,eval=FALSE}
 ```
 
 #### Running a simulation
 
 OK, now that the simulation has all the data it needs, we can run a simulation
 ```{r}
+# Adding benchmarking
+library(microbenchmark)
+
 # Load necessary packages (make sure to install, if you don't have these already)
 library(ebirdst)
 library(lubridate)
@@ -111,7 +121,7 @@ for (each_var in 1:ncol(param_set)){
 }
 
 #Set number of birds to include in simulation, 1000 birds is a reasonable starting point
-num_pulls <- 1000
+num_pulls <- 10
 
 #Set number of days to run the simulation for.
 num_days <- 365
@@ -124,7 +134,7 @@ nonbreeding_file <- read.csv(paste("data/species_maps/non_breeding/",gsub(" ","_
 season <- 1
 
 #We will set the start date as the midpoint of the breeding season.
-start_date <- (ebirdst_runs[which(ebirdst_runs$common_name==species_target),7:8])
+start_date <- (ebirdst_runs[which(ebirdst_runs$common_name==species_target),6:7])
 start_date <- as.numeric(start_date[1] + (start_date[2]-start_date[1])/2)
 start_date <- yday(as.Date(start_date,origin = "1970-01-01"))
 acceptable_week_dates <- seq(1,365,by=7)
@@ -148,6 +158,8 @@ upd_df <- initial_dfs[[2]]
 #Set up a dataframe to record the locations of birds on each day
 locs_rec <- as.data.frame(matrix(NA,ncol = 5,nrow = (num_days*num_pulls)))
 colnames(locs_rec) <- c("ID","Lon","Lat","Day","Season")
+
+result <- microbenchmark(
 for (days in 1:num_days){
   upd_df <- run_day(upd_df,static_df)
   locs <- save_locations(upd_df,save_season = TRUE)
@@ -155,6 +167,8 @@ for (days in 1:num_days){
   loc_ind_e <- (days - 1)*num_pulls + num_pulls 
   locs_rec[loc_ind_s:loc_ind_e,] <- locs
 }
+)
+
 head(locs_rec)
 ```
 
@@ -162,7 +176,7 @@ So now we have the locations of each simulated bird on each day. We can see what
 ```{r}
 library(dplyr)
 library(ggplot2)
-single_bird <- locs_rec %>% filter(ID == 1)
+single_bird <- locs_rec %>% filter(ID == 2)
 
 countries <- map_data("world")
 states <- map_data("state")
@@ -185,5 +199,78 @@ p <- ggplot() + coord_map("mollweide",xlim=c(-130,-80),ylim=c(15,70)) +
   theme(panel.background = element_rect(fill = alpha("lightskyblue2",.5)))
 print(p)
 ```
+```{r}
+# Other visualizations for understanding the model
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(raster)
 
-And
+countries <- map_data("world")
+states <- map_data("state")
+
+countries <- countries %>% filter(long < -32)
+
+glimpse(simulationData)
+
+simulationData <- locs_rec %>% filter(Season == 3)
+
+p <- ggplot() + coord_map("mollweide",xlim=c(-130,-80),ylim=c(15,70)) +
+  geom_polygon(data=countries, aes(x=long, y=lat, group=group), fill="grey90", color="darkgrey") +
+  geom_polygon(data=states, aes(x=long, y=lat, group=group), fill="grey90", color="darkgrey") +
+  geom_point(data=simulationData,aes(x=Lon,y=Lat,col=as.factor(Season))) +
+  scale_colour_manual(values=c("firebrick3","goldenrod2","skyblue3","seagreen"),
+                      labels=c("Breeding","Post-breeding migration","Wintering","Pre-breeding migration")) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.ticks.x = element_blank(),axis.text.x = element_blank(),
+        axis.ticks.y = element_blank(),axis.text.y = element_blank(),
+        axis.title.x=element_blank(),axis.title.y=element_blank(),
+        plot.margin = unit(c(0, 0, 0, 0), "null"),
+        panel.spacing = unit(c(0, 0, 0, 0), "null"),
+        legend.title=element_blank()) +
+  
+  theme(panel.background = element_rect(fill = alpha("lightskyblue2",.5)))
+print(p)
+
+ggplot(simulationData, aes(x = Day)) +
+  geom_histogram(binwidth = 0.5, fill = "blue", color = "black") +
+  labs(title = "Histogram of Values",
+       x = "Values",
+       y = "Frequency") +
+  theme_minimal()
+
+ggplot(simulationData, aes(x = Lat)) +
+  geom_histogram(binwidth = 0.5, fill = "blue", color = "black") +
+  labs(title = "Histogram of Values",
+       x = "Values",
+       y = "Frequency") +
+  theme_minimal()
+
+#%>% filter(Season == 2 | Season == 4) %>%
+data <- locs_rec %>% mutate(SeasonFactor = recode_factor(Season,
+                                      `1` = "Breeding",
+                                      `2` = "Post-breeding migration",
+                                      `3` = "Wintering",
+                                      `4` = "Pre-breeding migration"))
+
+ggplot(data, aes(x = Lon, fill = SeasonFactor)) +
+  geom_histogram(binwidth = 0.5) +
+  labs(title = "Histogram of longitude Colored by Season",
+       x = "Lon",
+       y = "Frequency") +
+   scale_fill_manual(values=c("firebrick3","goldenrod2","skyblue3","seagreen"),
+                     labels=c("Breeding","Post-breeding migration","Wintering","Pre-breeding migration")) +
+  theme_minimal()
+
+ggplot(data, aes(x = Lat, fill = SeasonFactor)) +
+  geom_histogram(binwidth = 0.5) +
+  labs(title = "Histogram of latitude Colored by Season",
+       x = "Lat",
+       y = "Frequency") +
+   scale_fill_manual(values=c("firebrick3","goldenrod2","skyblue3","seagreen"),
+                     labels=c("Breeding","Post-breeding migration","Wintering","Pre-breeding migration")) +
+  theme_minimal()
+```
+

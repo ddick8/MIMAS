@@ -1252,3 +1252,117 @@ get_spec_maps <- function(species_name,with_error_maps = TRUE){
   }
 }
 
+get_spec_maps_new <- function(species_name,with_error_maps = TRUE){
+  
+  library(ebirdst)
+  library(terra)
+  library(sf)
+  library(lubridate)
+  library(readr)
+  library(dplyr)
+  
+  #Assign number of draws for weekly maps
+  num_draws <- 100000
+  
+  #Assign number of draws for each week of breeding, non-breeding season
+  num_draws_b_nb <- 1000000
+  
+  #temp
+  species_name <- "Townsend's Warbler"
+  
+  #Download data
+  sp_path <- ebirdst_download_status(species=species_name, pattern="abundance", force = FALSE)
+  
+  #Download data
+  #sp_path <- ebirdst_download(species = species_name,pattern="abundance_median_hr",force = FALSE)
+  abunds <- load_raster(species=species_name,product = "abundance",
+                        path = ebirdst_data_dir())
+  #path = "C:\\Users\\DDICK\\AppData\\Roaming/R/data/R/ebirdst"
+  
+ # ebirdst_runs[(which(ebirdst_runs$common_name==species_name)),6:7]
+  
+  breed_dates <- week(as.matrix(ebirdst_runs[which(ebirdst_runs$common_name==species_name),6:7]));
+  nbreed_dates <- week(as.matrix(ebirdst_runs[which(ebirdst_runs$common_name==species_name),12:13]));
+  
+  breed_weeks <- seq(from=breed_dates[1],to=breed_dates[2],by=1);
+  
+  #Non-breeding seasons go over the new year normally, so make the adjustment to get the right weeks here
+  if (nbreed_dates[1]>nbreed_dates[2]){
+    nbreed_weeks <- c(seq(from=nbreed_dates[1],to=52,by=1),seq(from=1,to=nbreed_dates[2],by=1))
+  } else {
+    nbreed_weeks <- seq(from=nbreed_dates[1],to=nbreed_dates[2],by=1)
+  }
+  
+  breed_points <- c()
+  nbreed_points <- c()
+  
+  #For each week, 
+  err_all_week <- list()
+  if (with_error_maps){
+    #Get all weeks
+    week_to_process <- 1:52
+  } else {
+    #This gets the breeeding and wintering weeks
+    week_to_process <- c(nbreed_weeks,breed_weeks)
+  }
+  
+  for (each_week in week_to_process){
+    print(each_week)
+    #Split to week
+    wk_abunds <- terra::trim(abunds[[each_week]])
+    
+    #Convert to csvs
+    abunds_vlow <- terra::project(wk_abunds, y = "epsg:4326")
+    rel_abd_vlow <- as.points(abunds_vlow)
+    rel_abd_vlow <- data.frame(geom(rel_abd_vlow),values(rel_abd_vlow)) %>% select(-c("geom","hole","part"))
+    
+    colnames(rel_abd_vlow)[1:3] <- c("Lon","Lat","abundance")
+    rel_abd_vlow$rel_abund <- rel_abd_vlow$abundance/(sum(rel_abd_vlow$abundance))
+    
+    # Draw 100k points for sample. These points are not populated equally among the 2.96km squared area
+    point_sample_index <- sample(1:nrow(rel_abd_vlow),num_draws,replace=TRUE,prob=rel_abd_vlow$rel_abund)
+    point_sample <- rel_abd_vlow[point_sample_index,1:2]
+    
+    #Save to csv
+    #write_csv(point_sample,paste("data/species_maps/weekly/",gsub(" ", "_", species_name),
+    #                             "/",gsub(" ", "_", species_name),"_Week_",each_week,sep="",".csv"))
+    err_all_week[[each_week]] <- point_sample
+    #Draw for the breeding, non-breeding maps, with
+    
+    #For weeks in breeding season, add to list
+    if (each_week %in% breed_weeks){
+      breed_points <- rbind(breed_points,rel_abd_vlow[point_sample_index,])
+    }
+    
+    if (each_week %in% nbreed_weeks){
+      nbreed_points <- rbind(nbreed_points,rel_abd_vlow[point_sample_index,])
+    }
+    
+  }
+  
+  # Convert breeding points to relative abundance
+  breed_group <- breed_points %>% 
+    group_by(Lon,Lat) %>% 
+    summarise(abundance = n())
+  breed_group <- as.data.frame(breed_group)
+  breed_group$perc_occupancy <- breed_group$abundance/sum(breed_group$abundance)
+  colnames(breed_group)[1:4] <- c("longitude","latitude","abundance","perc_occupancy")
+  
+  #Do the same for non-breeding
+  nbreed_group <- nbreed_points %>% 
+    group_by(Lon,Lat) %>% 
+    summarise(abundance = n())
+  nbreed_group <- as.data.frame(nbreed_group)
+  nbreed_group$perc_occupancy <- nbreed_group$abundance/sum(breed_group$abundance)
+  colnames(nbreed_group)[1:4] <- c("longitude","latitude","abundance","perc_occupancy")
+  
+  #Write both to csv format
+  write_csv(breed_group,paste("data/species_maps/breeding/",gsub(" ", "_", species_name),"_breeding_all",sep="",".csv"))
+  write_csv(nbreed_group,paste("data/species_maps/non_breeding/",gsub(" ", "_", species_name),"_non_breeding_all",sep="",".csv"))
+  
+  if(with_error_maps){
+    saveRDS(point_sample,paste("data/species_maps/error_maps/",gsub(" ", "_", species_name),"_s200.rds",sep=""))
+  }
+}
+
+
